@@ -1,23 +1,17 @@
-import socketio
-import eventlet
+import asyncio
+import websockets
+import datetime
 
-sio = socketio.Server(async_mode='eventlet')
-app = socketio.WSGIApp(sio)
+async def handler(websocket):
+    async for message in websocket:
+        print(f"[{datetime.datetime.now()}] Server nhận: {message}")
+        response = f"Server đã nhận: {message} lúc {datetime.datetime.now()}"
+        await websocket.send(response)
 
-@sio.event
-def connect(sid, environ):
-    print(f'Client connected: {sid}')
+async def main():
+    async with websockets.serve(handler, "localhost", 8765):
+        print(f"[{datetime.datetime.now()}] WebSocket server đang chạy tại ws://localhost:8765")
+        await asyncio.Future()  # Chạy server mãi mãi
 
-@sio.event
-def disconnect(sid):
-    print(f'Client disconnected: {sid}')
-
-@sio.on('send_message')
-def handle_message(sid, data):
-    print(f'Received message from {sid}: {data}')
-    # Gửi lại tin nhắn cho tất cả các client khác (tùy chọn)
-    sio.emit('new_message', data, room=sid)
-
-if __name__ == '__main__':
-    eventlet.wsgi.server(eventlet.listen(('192.168.2.88', 5000)), app)
-    print("Socket.IO server listening on port 5000")
+if __name__ == "__main__":
+    asyncio.run(main())
