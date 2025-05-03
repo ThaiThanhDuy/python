@@ -1,64 +1,73 @@
 import paho.mqtt.client as mqtt
 import time
 
-# Cấu hình MQTT Broker
-MQTT_BROKER = "c69aeca2d48441618b65f77f38e2d8dc.s1.eu.hivemq.cloud"  # Thay thế bằng địa chỉ MQTT broker của bạn
-MQTT_PORT = 8883
-MQTT_TOPIC = "car/control"  # Topic MQTT để nhận lệnh điều khiển
-MQTT_USERNAME = "hivemq.webclient.1745246142729"  # Thay thế bằng username của bạn nếu có
-MQTT_PASSWORD = "#S9*y61bY;iG0&uUJfhR"  # Thay thế bằng password của bạn nếu có
+# Thông tin kết nối
+broker_url = "c69aeca2d48441618b65f77f38e2d8dc.s1.eu.hivemq.cloud"
+port = 8883
+topic_subscribe = "#"  # Theo dõi tất cả các topic để xem phản hồi (tùy chọn)
+topic_publish = "command/car"  # Topic để gửi lệnh điều khiển xe
 
-# --- CÁC HÀM ĐIỀU KHIỂN ĐỘNG CƠ (CẦN ĐIỀU CHỈNH CHO PHÙ HỢP VỚI PHẦN CỨNG CỦA BẠN) ---
-def move_forward():
-    print("Di chuyển về phía trước")
-    # Thêm code điều khiển động cơ để đi tới
+# Thông tin đăng nhập
+username = "hivemq.webclient.1746280264795"
+password = "ay;Z9W0$L1k7fbS!xH?C"
 
-def move_back():
-    print("Di chuyển về phía sau")
-    # Thêm code điều khiển động cơ để đi lùi
-
-def turn_left():
-    print("Rẽ trái")
-    # Thêm code điều khiển động cơ để rẽ trái
-
-def turn_right():
-    print("Rẽ phải")
-    # Thêm code điều khiển động cơ để rẽ phải
-# -----------------------------------------------------------------------------
-
+# Các hàm callback
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        print("Đã kết nối thành công đến MQTT Broker!")
-        client.subscribe(MQTT_TOPIC)
+        print("Đã kết nối thành công đến MQTT broker!")
+        client.subscribe(topic_subscribe)  # Theo dõi tất cả để xem phản hồi (tùy chọn)
     else:
-        print(f"Kết nối thất bại, mã lỗi {rc}")
+        print(f"Kết nối thất bại với mã lỗi {rc}")
 
 def on_message(client, userdata, msg):
-    command = msg.payload.decode('utf-8')
-    print(f"Nhận được lệnh: {command}")
-    if command == "forward":
-        move_forward()
-    elif command == "back":
-        move_back()
-    elif command == "left":
-        turn_left()
-    elif command == "right":
-        turn_right()
+    print(f"Nhận được tin nhắn từ topic '{msg.topic}': {msg.payload.decode()}")
 
-if __name__ == "__main__":
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
-    #client = mqtt.Client(client_id="python_car_controller", callback_api_version=mqtt.CallbackAPIVersion.VERSION1) # Thêm client_id
+def on_publish(client, userdata, mid):
+    print(f"Đã gửi lệnh với message ID: {mid}")
 
-    # Thiết lập thông tin đăng nhập nếu cần
-    if MQTT_USERNAME and MQTT_PASSWORD:
-        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+# Tạo client MQTT
+client = mqtt.Client()
 
-    client.on_connect = on_connect
-    client.on_message = on_message
+# **Thêm username và password trước khi connect**
+client.username_pw_set(username, password)
 
-    try:
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        client.loop_forever()  # Duy trì kết nối và lắng nghe tin nhắn
+# Gán các hàm callback
+client.on_connect = on_connect
+client.on_message = on_message
+client.on_publish = on_publish
 
-    except Exception as e:
-        print(f"Đã xảy ra lỗi: {e}")
+# Thiết lập kết nối TLS
+client.tls_set()
+
+# Thực hiện kết nối
+client.connect(broker_url, port, 60)
+
+# Bắt đầu vòng lặp
+client.loop_start()
+
+try:
+    while True:
+        command = input("Nhập lệnh điều khiển (forward, backward, left, right, quit): ").lower()
+        if command == "forward":
+            client.publish(topic_publish, "FORWARD")
+            print("Đã gửi lệnh: FORWARD")
+        elif command == "backward":
+            client.publish(topic_publish, "BACKWARD")
+            print("Đã gửi lệnh: BACKWARD")
+        elif command == "left":
+            client.publish(topic_publish, "LEFT")
+            print("Đã gửi lệnh: LEFT")
+        elif command == "right":
+            client.publish(topic_publish, "RIGHT")
+            print("Đã gửi lệnh: RIGHT")
+        elif command == "quit":
+            break
+        else:
+            print("Lệnh không hợp lệ. Vui lòng nhập forward, backward, left, right hoặc quit.")
+        time.sleep(0.1)  # Tránh gửi lệnh quá nhanh
+except KeyboardInterrupt:
+    print("Ngắt kết nối...")
+finally:
+    client.loop_stop()
+    client.disconnect()
+    print("Đã ngắt kết nối khỏi MQTT broker.")
