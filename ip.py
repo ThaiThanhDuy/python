@@ -23,7 +23,7 @@ try:
 
     # Gửi và nhận dữ liệu (ví dụ đơn giản)
     message = "Xin chào từ Python!"
-    client_socket.sendall(message.encode('utf-8'))
+    client_socket.sendall(message.encode("utf-8"))
     print(f"Đã gửi: {message}")
 
     data = client_socket.recv(1024)
@@ -32,11 +32,10 @@ try:
 except socket.timeout:
     print(f"Kết nối đến {target_ip}:{target_port} bị hết thời gian chờ.")
 except ConnectionRefusedError:
-    print(
-        f"Không thể kết nối đến {target_ip}:{target_port}. Kết nối bị từ chối.")
+    print(f"Không thể kết nối đến {target_ip}:{target_port}. Kết nối bị từ chối.")
 except Exception as e:
     print(f"Đã xảy ra lỗi: {e}")
 finally:
     # Đóng kết nối
-    if 'client_socket' in locals():
+    if "client_socket" in locals():
         client_socket.close()

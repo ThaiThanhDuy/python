@@ -25,12 +25,12 @@ if not GOOGLE_API_KEY:
     print("Lỗi: Vui lòng thiết lập API Key.")
     exit()
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 
 def speak_vietnamese_gg(text):
     try:
-        tts = gTTS(text=text, lang='vi')
+        tts = gTTS(text=text, lang="vi")
         filename = "temp_speech.mp3"
         tts.save(filename)
         playsound(filename)
@@ -83,21 +83,24 @@ class MainWindow(QtWidgets.QMainWindow):
                     # ⏱ Tăng thời gian ghi tối đa lên 10 giây
                     audio = r.listen(source, timeout=10, phrase_time_limit=10)
 
-                    text = r.recognize_google(audio, language='vi-VN')
+                    text = r.recognize_google(audio, language="vi-VN")
                     self.cau_hoi_text = text
                     self.ui.label_cau_hoi_ai.setText(f"🎤 Câu hỏi: {text}")
                     self.ui.label_tra_loi_ai.setText(
-                        "✅ Đã ghi âm xong. Nhấn 'Xác nhận' để gửi.")
+                        "✅ Đã ghi âm xong. Nhấn 'Xác nhận' để gửi."
+                    )
                 except sr.UnknownValueError:
                     self.ui.label_cau_hoi_ai.setText(
-                        "❌ Không thể nhận diện được giọng nói.Bạn bấm Hủy để bắt đầu lại nhé ")
+                        "❌ Không thể nhận diện được giọng nói.Bạn bấm Hủy để bắt đầu lại nhé "
+                    )
                     self.ui.label_tra_loi_ai.setText("")
                 except sr.RequestError as e:
                     self.ui.label_cau_hoi_ai.setText(f"❌ Lỗi kết nối: {e}")
                     self.ui.label_tra_loi_ai.setText("")
                 except sr.WaitTimeoutError:
                     self.ui.label_cau_hoi_ai.setText(
-                        "⌛ Hết thời gian chờ. Bạn chưa nói gì.")
+                        "⌛ Hết thời gian chờ. Bạn chưa nói gì."
+                    )
                     self.ui.label_tra_loi_ai.setText("❗ Vui lòng thử lại.")
 
         else:
@@ -106,15 +109,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.label_cau_hoi_ai.clear()
             self.ui.label_tra_loi_ai.clear()
             self.ui.label_lang_nghe.setText(
-                "🔴🔴 Bạn muốn tra cứu thì hãy bấm bắt đầu nhé !")
+                "🔴🔴 Bạn muốn tra cứu thì hãy bấm bắt đầu nhé !"
+            )
 
     def xac_nhan_cau_hoi_ai(self):
         if not self.cau_hoi_text:
             self.ui.label_tra_loi_ai.setText("⚠️ Chưa có câu hỏi để gửi.")
             return
 
-        self.ui.label_tra_loi_ai.setText(
-            "🤖 Đang xử lý câu hỏi... Vui lòng chờ.")
+        self.ui.label_tra_loi_ai.setText("🤖 Đang xử lý câu hỏi... Vui lòng chờ.")
         QtWidgets.QApplication.processEvents()
         self.ui.label_cau_hoi_ai.clear()
         self.ui.label_tra_loi_ai.clear()
@@ -126,24 +129,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 tra_loi = response.text.strip()
                 self.ui.label_tra_loi_ai.setText(f"💬 Trả lời: {tra_loi}")
                 # Chuyển văn bản thành giọng nói
-                tts = gTTS(text=response.text, lang='vi')
+                tts = gTTS(text=response.text, lang="vi")
                 tts.save("phan_hoi_v3.mp3")
                 playsound("phan_hoi_v3.mp3")
                 os.remove("phan_hoi_v3.mp3")
                 self.cau_hoi_text = ""
 
             else:
-                self.ui.label_tra_loi_ai.setText(
-                    "⚠️ Không nhận được phản hồi từ AI.")
+                self.ui.label_tra_loi_ai.setText("⚠️ Không nhận được phản hồi từ AI.")
 
         except Exception as e:
-            self.ui.label_tra_loi_ai.setText(
-                f"❌ Lỗi khi gửi câu hỏi: {str(e)}")
+            self.ui.label_tra_loi_ai.setText(f"❌ Lỗi khi gửi câu hỏi: {str(e)}")
 
     def huy_cau_hoi_ai(self):
         self.cau_hoi_text = ""
         self.ui.label_cau_hoi_ai.setText(
-            "🔄 Câu hỏi đã bị hủy. Vui lòng nhấn 'Bắt đầu' để thu lại.")
+            "🔄 Câu hỏi đã bị hủy. Vui lòng nhấn 'Bắt đầu' để thu lại."
+        )
         self.ui.label_tra_loi_ai.setText("")
         self.ui.btn_bat_dau_ai.setText("Bắt đầu")
         self.ai_dang_chay = False
@@ -157,20 +159,19 @@ class MainWindow(QtWidgets.QMainWindow):
     def load_excel(self):
 
         try:
-            df = pd.read_excel("data_v1.xlsx", header=None, engine='openpyxl')
+            df = pd.read_excel("data_v1.xlsx", header=None, engine="openpyxl")
             df = df.iloc[:, :2]
-            df.columns = ['Câu hỏi', 'Câu trả lời']
+            df.columns = ["Câu hỏi", "Câu trả lời"]
             df.dropna(how="any", inplace=True)
 
             self.ui.tc_nha_truong.clear()
             for _, row in df.iterrows():
-                item = QListWidgetItem(row['Câu hỏi'])
-                item.setData(Qt.UserRole, row['Câu trả lời'])
+                item = QListWidgetItem(row["Câu hỏi"])
+                item.setData(Qt.UserRole, row["Câu trả lời"])
                 item.setTextAlignment(Qt.AlignLeft)  # Canh giữa
                 self.ui.tc_nha_truong.addItem(item)
         except Exception as e:
-            QMessageBox.critical(
-                self, "Lỗi", f"Không đọc được file Excel: {str(e)}")
+            QMessageBox.critical(self, "Lỗi", f"Không đọc được file Excel: {str(e)}")
 
     def on_question_clicked(self):
         item = self.ui.tc_nha_truong.currentItem()
