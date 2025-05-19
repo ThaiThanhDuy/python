@@ -4,6 +4,8 @@ from tkinter import messagebox, ttk
 import serial.tools.list_ports
 import threading
 import serial
+
+
 class UARTApp:
     def __init__(self, master):
         self.master = master
@@ -22,11 +24,13 @@ class UARTApp:
         self.port_label.pack(pady=5)
 
         # Dropdown for COM Port selection
-        self.port_combobox = ttk.Combobox(self.master, values=self.get_com_ports())
+        self.port_combobox = ttk.Combobox(
+            self.master, values=self.get_com_ports())
         self.port_combobox.pack(pady=5)
 
         # Button to open the serial port
-        self.open_button = tk.Button(self.master, text="Open Port", command=self.open_port)
+        self.open_button = tk.Button(
+            self.master, text="Open Port", command=self.open_port)
         self.open_button.pack(pady=5)
 
         # Text area for sending data
@@ -36,7 +40,8 @@ class UARTApp:
         self.send_text = tk.Entry(self.master)
         self.send_text.pack(pady=5)
 
-        self.send_button = tk.Button(self.master, text="Send", command=self.send_data)
+        self.send_button = tk.Button(
+            self.master, text="Send", command=self.send_data)
         self.send_button.pack(pady=5)
 
         # Text area for received data
@@ -47,10 +52,9 @@ class UARTApp:
         self.receive_text.pack(pady=5)
 
         # Button to close the serial port
-        self.close_button = tk.Button(self.master, text="Close Port", command=self.close_port)
+        self.close_button = tk.Button(
+            self.master, text="Close Port", command=self.close_port)
         self.close_button.pack(pady=5)
-       
-     
 
     def get_com_ports(self):
         """Get a list of available COM ports."""
@@ -63,7 +67,7 @@ class UARTApp:
             if not port:
                 messagebox.showwarning("Warning", "Please select a COM port.")
                 return
-            
+
             self.serial_port = serial.Serial(port, baudrate=115200, timeout=1)
             messagebox.showinfo("Info", f"Port {port} opened successfully.")
             self.receive_thread = threading.Thread(target=self.receive_data)
@@ -94,7 +98,8 @@ class UARTApp:
             messagebox.showinfo("Info", "Port closed.")
         else:
             messagebox.showwarning("Warning", "No port is open.")
-    
+
+
 if __name__ == "__main__":
     root = tk.Tk()
     app = UARTApp(root)

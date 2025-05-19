@@ -3,14 +3,17 @@ import textwrap
 import google.generativeai as genai
 import os  # For accessing environment variables
 
+
 def to_markdown(text):
     # Replace bullet points with a more consistent markdown format
     text = text.replace('•', '* ')
     # Indent the entire text block for markdown blockquote style
     return textwrap.indent(text, '> ', predicate=lambda _: True)
 
+
 # Securely store your API key using an environment variable
-GOOGLE_API_KEY = "AIzaSyCxp0wD3-6nZOKaRn_WUkvzwlHOKfw-hJw"  # Replace with your actual API key
+# Replace with your actual API key
+GOOGLE_API_KEY = "AIzaSyCxp0wD3-6nZOKaRn_WUkvzwlHOKfw-hJw"
 
 if not GOOGLE_API_KEY:
     print("Lỗi: Vui lòng thiết lập biến môi trường GEMINI_API_KEY.")
