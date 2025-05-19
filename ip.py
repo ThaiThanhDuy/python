@@ -6,7 +6,7 @@ local_ip = socket.gethostbyname(hostname)
 print(f"Địa chỉ IP cục bộ của laptop: {local_ip}")
 
 # Định nghĩa địa chỉ IP và cổng muốn kết nối đến
-#target_ip = local_ip
+# target_ip = local_ip
 target_ip = "0.0.0.0"
 target_port = 5000  # Ví dụ một cổng nào đó đang được lắng nghe
 
@@ -23,7 +23,7 @@ try:
 
     # Gửi và nhận dữ liệu (ví dụ đơn giản)
     message = "Xin chào từ Python!"
-    client_socket.sendall(message.encode('utf-8'))
+    client_socket.sendall(message.encode("utf-8"))
     print(f"Đã gửi: {message}")
 
     data = client_socket.recv(1024)
@@ -37,5 +37,5 @@ except Exception as e:
     print(f"Đã xảy ra lỗi: {e}")
 finally:
     # Đóng kết nối
-    if 'client_socket' in locals():
+    if "client_socket" in locals():
         client_socket.close()

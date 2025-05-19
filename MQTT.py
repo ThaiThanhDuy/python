@@ -11,6 +11,7 @@ topic_publish = "command/car"  # Topic để gửi lệnh điều khiển xe
 username = "hivemq.webclient.1746280264795"
 password = "ay;Z9W0$L1k7fbS!xH?C"
 
+
 # Các hàm callback
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -19,11 +20,14 @@ def on_connect(client, userdata, flags, rc):
     else:
         print(f"Kết nối thất bại với mã lỗi {rc}")
 
+
 def on_message(client, userdata, msg):
     print(f"Nhận được tin nhắn từ topic '{msg.topic}': {msg.payload.decode()}")
 
+
 def on_publish(client, userdata, mid):
     print(f"Đã gửi lệnh với message ID: {mid}")
+
 
 # Tạo client MQTT
 client = mqtt.Client()
@@ -47,7 +51,9 @@ client.loop_start()
 
 try:
     while True:
-        command = input("Nhập lệnh điều khiển (forward, backward, left, right, quit): ").lower()
+        command = input(
+            "Nhập lệnh điều khiển (forward, backward, left, right, quit): "
+        ).lower()
         if command == "forward":
             client.publish(topic_publish, "FORWARD")
             print("Đã gửi lệnh: FORWARD")
@@ -63,7 +69,9 @@ try:
         elif command == "quit":
             break
         else:
-            print("Lệnh không hợp lệ. Vui lòng nhập forward, backward, left, right hoặc quit.")
+            print(
+                "Lệnh không hợp lệ. Vui lòng nhập forward, backward, left, right hoặc quit."
+            )
         time.sleep(0.1)  # Tránh gửi lệnh quá nhanh
 except KeyboardInterrupt:
     print("Ngắt kết nối...")

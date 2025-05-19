@@ -6,7 +6,7 @@ import time
 broker_url = "c69aeca2d48441618b65f77f38e2d8dc.s1.eu.hivemq.cloud"
 port = 8883
 topic_subscribe_command = "command/car"  # Topic nhận lệnh
-topic_publish_camera = "camera/stream"   # Topic gửi hình ảnh
+topic_publish_camera = "camera/stream"  # Topic gửi hình ảnh
 
 # Thông tin đăng nhập
 username = "hivemq.webclient.1746280264795"
@@ -16,6 +16,7 @@ password = "ay;Z9W0$L1k7fbS!xH?C"
 client = mqtt.Client()
 client.username_pw_set(username, password)
 
+
 # Hàm callback khi kết nối
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -24,6 +25,7 @@ def on_connect(client, userdata, flags, rc):
     else:
         print(f"Kết nối thất bại với mã lỗi {rc}")
 
+
 # Hàm callback khi nhận được tin nhắn
 def on_message(client, userdata, msg):
     if msg.topic == topic_subscribe_command:
@@ -31,9 +33,11 @@ def on_message(client, userdata, msg):
         print(f"Nhận được lệnh: {command}")
         # Thêm logic điều khiển xe ở đây dựa trên 'command'
 
+
 # Hàm callback khi đăng ký topic thành công
 def on_subscribe(client, userdata, mid, granted_qos):
     print(f"Đã đăng ký topic: {topic_subscribe_command} với QoS: {granted_qos}")
+
 
 # Gán các hàm callback
 client.on_connect = on_connect
@@ -57,17 +61,19 @@ try:
             break
 
         # Mã hóa frame thành JPEG
-        _, img_encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        _, img_encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         data_to_send = img_encoded.tobytes()
 
         # Publish frame lên topic camera
         client.publish(topic_publish_camera, payload=data_to_send, qos=0)
-        print(f"Đã gửi frame ảnh ({len(data_to_send)} bytes) lên topic: {topic_publish_camera}")
+        print(
+            f"Đã gửi frame ảnh ({len(data_to_send)} bytes) lên topic: {topic_publish_camera}"
+        )
 
         time.sleep(0.1)  # Gửi mỗi 100ms (điều chỉnh tùy ý)
 
         # Duy trì vòng lặp MQTT để xử lý tin nhắn đến
-        client.loop(timeout=0.01) # Kiểm tra tin nhắn đến mỗi 10ms
+        client.loop(timeout=0.01)  # Kiểm tra tin nhắn đến mỗi 10ms
 
 except KeyboardInterrupt:
     print("Dừng script.")
