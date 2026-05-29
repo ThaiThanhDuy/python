@@ -1,0 +1,112 @@
+import tkinter as tk
+from tkinter import messagebox, ttk
+import serial.tools.list_ports
+import threading
+import serial
+
+
+class UARTApp:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("UART Communication")
+        self.master.geometry("600x500")
+
+        self.serial_port = None
+        self.receive_thread = None
+        self.running = False
+
+        self.create_widgets()
+
+    def create_widgets(self):
+        self.port_label = tk.Label(self.master, text="Select COM Port:")
+        self.port_label.pack(pady=5)
+
+        self.port_combobox = ttk.Combobox(self.master, values=self.get_com_ports())
+        self.port_combobox.pack(pady=5)
+
+        self.open_button = tk.Button(
+            self.master, text="Open Port", command=self.open_port
+        )
+        self.open_button.pack(pady=5)
+
+        self.send_label = tk.Label(self.master, text="Send Data:")
+        self.send_label.pack(pady=5)
+
+        self.send_text = tk.Entry(self.master)
+        self.send_text.pack(pady=5)
+
+        self.send_button = tk.Button(self.master, text="Send", command=self.send_data)
+        self.send_button.pack(pady=5)
+
+        self.receive_label = tk.Label(self.master, text="Received Data:")
+        self.receive_label.pack(pady=5)
+
+        self.receive_text = tk.Text(self.master, height=10, width=60)
+        self.receive_text.pack(pady=5)
+
+        self.close_button = tk.Button(
+            self.master, text="Close Port", command=self.close_port
+        )
+        self.close_button.pack(pady=5)
+
+    def get_com_ports(self):
+        ports = serial.tools.list_ports.comports()
+        return [port.device for port in ports]
+
+    def open_port(self):
+        try:
+            port = self.port_combobox.get()
+            if not port:
+                messagebox.showwarning("Warning", "Please select a COM port.")
+                return
+
+            self.serial_port = serial.Serial(port, baudrate=115200, timeout=0.1)
+            self.running = True
+
+            messagebox.showinfo("Info", f"Port {port} opened successfully.")
+
+            self.receive_thread = threading.Thread(target=self.receive_data)
+            self.receive_thread.daemon = True
+            self.receive_thread.start()
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def send_data(self):
+        if self.serial_port and self.serial_port.is_open:
+            data = self.send_text.get()
+            if data:
+                full_data = data + "\n"  # Gửi thêm Enter để STM32 biết kết thúc chuỗi
+                self.serial_port.write(full_data.encode())
+                self.send_text.delete(0, tk.END)
+        else:
+            messagebox.showwarning("Warning", "Open a port first.")
+
+    def receive_data(self):
+        while self.running:
+            try:
+                if self.serial_port and self.serial_port.is_open:
+                    data = (
+                        self.serial_port.readline()
+                        .decode("utf-8", errors="ignore")
+                        .strip()
+                    )
+                    if data:
+                        self.receive_text.insert(tk.END, data + "\n")
+                        self.receive_text.see(tk.END)
+            except Exception:
+                pass  # tránh crash nếu mất kết nối
+
+    def close_port(self):
+        self.running = False
+        if self.serial_port and self.serial_port.is_open:
+            self.serial_port.close()
+            messagebox.showinfo("Info", "Port closed.")
+        else:
+            messagebox.showwarning("Warning", "No port is open.")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = UARTApp(root)
+    root.mainloop()
