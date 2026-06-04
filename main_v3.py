@@ -20,7 +20,7 @@ import gemini
 from AppAl_v1 import TextProcessor, main
 
 # Cấu hình API key
-GOOGLE_API_KEY = "AIzaSyCxp0wD3-6nZOKaRn_WUkvzwlHOKfw-hJw"
+GOOGLE_API_KEY = ""
 if not GOOGLE_API_KEY:
     print("Lỗi: Vui lòng thiết lập API Key.")
     exit()
