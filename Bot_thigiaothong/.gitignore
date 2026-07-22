@@ -3,3 +3,10 @@ __pycache__/
 *.pyc
 detected_questions.json
 question_images/
+
+# PyInstaller build output (chạy build_exe.bat để tạo lại)
+build/
+dist/
+*.spec
+pyinstaller_build.log
+build_exe_run.log

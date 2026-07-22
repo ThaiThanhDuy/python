@@ -29,6 +29,18 @@ from pynput import keyboard as pynput_keyboard
 import main as core
 
 
+def app_base_dir():
+    """Thư mục để lưu dữ liệu (detected_questions.json, question_images/).
+    Khi chạy từ mã nguồn thì đây là thư mục chứa gui.py; khi đã đóng gói
+    thành .exe (PyInstaller) thì __file__ trỏ vào thư mục TẠM (bị xóa sau
+    mỗi lần chạy, kể cả bản --onefile), nên phải dùng thư mục chứa chính
+    file .exe (sys.executable) để dữ liệu lưu được ổn định giữa các lần mở
+    app, không bị mất."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
 def normalize_for_match(text):
     """Bỏ dấu tiếng Việt + hạ chữ thường, CHỈ dùng để so khớp mẫu (không
     dùng để lưu/hiển thị). OCR hay đọc sai/lẫn dấu thanh ("hỏi" -> "hòi"/
@@ -54,10 +66,10 @@ QUESTION_HEADER_PATTERN = re.compile(r"^\d+\s*\.?\s*cau\s*hoi")
 ANSWER_OPTION_PATTERN = re.compile(r"^\d+[-.]\s*\S")
 
 # Where detected questions/answers + their on-screen coordinates are saved.
-OCR_RECORDS_PATH = Path(__file__).resolve().parent / "detected_questions.json"
+OCR_RECORDS_PATH = app_base_dir() / "detected_questions.json"
 
 # Where cropped question-illustration images are saved, named by their hash.
-QUESTION_IMAGES_DIR = Path(__file__).resolve().parent / "question_images"
+QUESTION_IMAGES_DIR = app_base_dir() / "question_images"
 
 
 def try_fix_xwayland_auth():
@@ -121,7 +133,21 @@ class App:
     DATA_TREE_BASE_FONT_SIZE = 9
     DATA_TREE_BASE_THUMB = 48
     DATA_TREE_BASE_INDICATOR = 9
+    DATA_TREE_BASE_EDIT_COL_WIDTH = 32
     DATA_TREE_MAX_SCALE = 3.0
+
+    EDIT_ICON = "✏"
+    SAVE_ICON = "💾"
+
+    # Danh sách phím tắt toàn cục đã cài - in ra dòng log đầu tiên khi mở app
+    # để biết ngay có những phím nào (xem _log_hotkeys_summary), giữ đúng thứ
+    # tự đăng ký trong self.hotkey_listener bên dưới.
+    HOTKEYS_INFO = [
+        ("Ctrl+Shift+S", "Mở chế độ detect (nạp OCR, chưa quét)"),
+        ("Ctrl+Shift+Q", "Đóng chế độ detect"),
+        ("Ctrl+Shift+F", "Detect 1 câu + ghi dữ liệu (tab App)"),
+        ("Ctrl+Shift+E", "Đối chiếu đáp án đã lưu + tự click (tab Tool)"),
+    ]
 
     def __init__(self, root):
         self.root = root
@@ -142,12 +168,11 @@ class App:
 
         self.ocr_reader = None
         self.ocr_records = {}  # question text -> record, mirrors OCR_RECORDS_PATH
-        self.detect_armed = False  # True sau khi bấm Start; Ctrl+Shift+Q chỉ hoạt động khi True
+        # True sau khi bấm Start (Ctrl+Shift+S) - dùng chung cho cả App
+        # (Ctrl+Shift+F) và Tool (Ctrl+Shift+E); Ctrl+Shift+Q tắt lại.
+        self.detect_armed = False
         self._detect_one_busy = False
-
-        self.tool_thread = None
-        self.tool_stop_event = threading.Event()
-        self._last_tool_frame_sig = None
+        self._tool_check_busy = False
 
         self.monitors = core.detect_monitors()
         default_index = next(
@@ -157,43 +182,62 @@ class App:
         self.notebook = notebook = ttk.Notebook(root)
         notebook.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 0))
 
-        tool_tab = ttk.Frame(notebook, padding=12)
+        self.tool_tab = tool_tab = ttk.Frame(notebook, padding=12)
         app_tab = ttk.Frame(notebook, padding=12)
         self.data_tab = data_tab = ttk.Frame(notebook, padding=12)
         test_tab = ttk.Frame(notebook, padding=12)
         notebook.add(tool_tab, text="Tool")
         notebook.add(app_tab, text="App")
         notebook.add(data_tab, text="Data")
-        notebook.add(test_tab, text="Test")
+        notebook.add(test_tab, text="Dev")
 
-        # --- Tab "Tool": đối chiếu đáp án đúng đã lưu và tự click ---
+        # --- Tab "Tool": đối chiếu câu hỏi + ảnh đang hiện với đáp án đúng đã
+        # lưu, tự động click vào ô tròn của đáp án đó rồi báo kết quả qua
+        # log. Start/Stop (Ctrl+Shift+S/Q) dùng CHUNG với tab App - chỉ
+        # "mở/đóng" chế độ detect (nạp OCR), không tự quét. Ctrl+Shift+E luôn
+        # là hành động "đối chiếu" của tab Tool, bất kể đang xem tab nào.
         row = 0
-        ttk.Label(tool_tab, text="Chu kỳ quét (s):").grid(row=row, column=0, sticky="w")
-        self.tool_interval_var = tk.StringVar(value="1")
-        ttk.Entry(tool_tab, textvariable=self.tool_interval_var, width=10).grid(
-            row=row, column=1, sticky="w"
-        )
+        ttk.Label(
+            tool_tab,
+            text=(
+                "Start (Ctrl+Shift+S) / Stop (Ctrl+Shift+Q): dùng chung với tab App - "
+                "chỉ khởi động (nạp OCR), chưa quét.\n"
+                "Ctrl+Shift+E: detect 1 câu đang hiện, đối chiếu với đáp án đúng đã "
+                "lưu (câu hỏi + ảnh), tự click vào ô tròn đáp án đó và báo log."
+            ),
+            foreground="#555",
+            justify="left",
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
 
         row += 1
         ttk.Label(tool_tab, text="Cách lề trái đáp án (px):").grid(
-            row=row, column=0, sticky="w"
+            row=row, column=0, sticky="w", pady=(6, 0)
         )
         self.tool_offset_var = tk.StringVar(value="30")
         ttk.Entry(tool_tab, textvariable=self.tool_offset_var, width=10).grid(
-            row=row, column=1, sticky="w"
+            row=row, column=1, sticky="w", pady=(6, 0)
         )
 
         row += 1
         tool_btns = ttk.Frame(tool_tab)
         tool_btns.grid(row=row, column=0, columnspan=3, pady=(10, 0))
         self.tool_start_btn = ttk.Button(
-            tool_btns, text="Start", command=self.start_tool
+            tool_btns, text="Start (Ctrl+Shift+S)", command=self.open_detect
         )
         self.tool_start_btn.grid(row=0, column=0, padx=4)
         self.tool_stop_btn = ttk.Button(
-            tool_btns, text="Stop", command=self.stop_tool, state="disabled"
+            tool_btns,
+            text="Stop (Ctrl+Shift+Q)",
+            command=self.close_detect,
+            state="disabled",
         )
         self.tool_stop_btn.grid(row=0, column=1, padx=4)
+        self.tool_check_btn = ttk.Button(
+            tool_btns,
+            text="Đối chiếu đáp án (Ctrl+Shift+E)",
+            command=self.trigger_tool_check,
+        )
+        self.tool_check_btn.grid(row=0, column=2, padx=4)
 
         row += 1
         self.tool_status_var = tk.StringVar(value="Sẵn sàng.")
@@ -203,15 +247,15 @@ class App:
 
         # --- Tab "App": Detect màn hình (OCR) + ghi dữ liệu ---
         # Start chỉ khởi động (nạp sẵn model OCR cho nhanh) chứ KHÔNG tự quét
-        # liên tục - quét từng câu một hoàn toàn thủ công qua Ctrl+Shift+Q để
+        # liên tục - quét từng câu một hoàn toàn thủ công qua Ctrl+Shift+F để
         # bạn chủ động chọn đúng lúc câu hỏi đã hiện đủ trên màn hình, tránh
         # ghi nhầm ảnh/nội dung của câu trước/câu đang load dở.
         row = 0
         ttk.Label(
             app_tab,
             text=(
-                "Start: khởi động (nạp OCR, chưa quét).\n"
-                "Ctrl+Shift+Q: detect đúng 1 câu hỏi + đáp án + ảnh đang hiện."
+                "Start: khởi động (nạp OCR, chưa quét), dùng chung với tab Tool.\n"
+                "Ctrl+Shift+F: detect đúng 1 câu hỏi + đáp án + ảnh đang hiện."
             ),
             foreground="#555",
             justify="left",
@@ -221,18 +265,18 @@ class App:
         btns = ttk.Frame(app_tab)
         btns.grid(row=row, column=0, columnspan=3, pady=(10, 0))
         self.start_btn = ttk.Button(
-            btns, text="Start (Ctrl+Shift+S)", command=self.start_detect_and_record
+            btns, text="Start (Ctrl+Shift+S)", command=self.open_detect
         )
         self.start_btn.grid(row=0, column=0, padx=4)
         self.stop_btn = ttk.Button(
             btns,
-            text="Stop (Ctrl+Shift+E)",
-            command=self.stop_detect_and_record,
+            text="Stop (Ctrl+Shift+Q)",
+            command=self.close_detect,
             state="disabled",
         )
         self.stop_btn.grid(row=0, column=1, padx=4)
         self.detect_one_btn = ttk.Button(
-            btns, text="Detect 1 câu (Ctrl+Shift+Q)", command=self.trigger_detect_one
+            btns, text="Detect 1 câu (Ctrl+Shift+F)", command=self.trigger_detect_one
         )
         self.detect_one_btn.grid(row=0, column=2, padx=4)
 
@@ -322,9 +366,21 @@ class App:
             ],
         )
         self.data_tree = ttk.Treeview(
-            tree_frame, show="tree", height=16, style="Data.Treeview"
+            tree_frame,
+            columns=("edit",),
+            show="tree headings",
+            height=16,
+            style="Data.Treeview",
         )
         self.data_tree.column("#0", width=self.DATA_TREE_BASE_WIDTH, anchor="w")
+        self.data_tree.heading("#0", text="")
+        self.data_tree.heading("edit", text="")
+        self.data_tree.column(
+            "edit",
+            width=self.DATA_TREE_BASE_EDIT_COL_WIDTH,
+            anchor="center",
+            stretch=False,
+        )
         self.data_tree.tag_configure(
             "question", font=("TkDefaultFont", self.DATA_TREE_BASE_FONT_SIZE, "bold")
         )
@@ -332,6 +388,7 @@ class App:
             "answer", font=("TkDefaultFont", self.DATA_TREE_BASE_FONT_SIZE)
         )
         self.data_tree.bind("<Button-1>", self.on_data_tree_click)
+        self.data_editing = None  # {"item_id","key","kind","answer_index","entry"} hoặc None
 
         data_vsb = ttk.Scrollbar(
             tree_frame, orient="vertical", command=self.data_tree.yview
@@ -483,11 +540,16 @@ class App:
         # Phím tắt toàn cục (không cần cửa sổ app đang được focus) để khỏi
         # phải click vào app rồi làm mất focus tab trình duyệt — nhiều trang
         # thi có chống gian lận, phát hiện rời màn hình khi đổi cửa sổ.
+        # S/Q dùng chung cho cả App lẫn Tool (mở/đóng "chế độ detect" - nạp
+        # sẵn OCR, không tự quét gì). B/E là 2 hành động chi tiết cố định:
+        # B luôn là detect+ghi (App), E luôn là detect+đối chiếu (Tool) - bất
+        # kể đang xem tab nào, không cần biết tab nào đang active.
         self.hotkey_listener = pynput_keyboard.GlobalHotKeys(
             {
                 "<ctrl>+<shift>+s": self.on_start_hotkey,
-                "<ctrl>+<shift>+e": self.on_stop_hotkey,
-                "<ctrl>+<shift>+q": self.on_detect_one_hotkey,
+                "<ctrl>+<shift>+q": self.on_stop_hotkey,
+                "<ctrl>+<shift>+f": self.on_detect_one_hotkey,
+                "<ctrl>+<shift>+e": self.on_tool_check_hotkey,
             }
         )
         self.hotkey_listener.start()
@@ -500,6 +562,22 @@ class App:
         # app) - hiện sẵn ngay từ lúc mở app, luôn nổi trên cùng mọi lúc chứ
         # không chỉ khi Start (Ctrl+Shift+S) nữa.
         self.show_log_overlay(self.monitors[self.monitor_box.current()])
+
+        # Dòng log đầu tiên: liệt kê toàn bộ phím tắt đã cài, để biết ngay có
+        # gì mà dùng chứ không phải nhớ/đoán.
+        self._log_hotkeys_summary()
+
+        # Tự động "mở" chế độ detect (nạp OCR) ngay khi mở app, khỏi phải bấm
+        # Ctrl+Shift+S lần đầu. Nếu sau đó tắt bằng Ctrl+Shift+Q, vẫn bấm lại
+        # Ctrl+Shift+S để mở lại như bình thường.
+        self.open_detect()
+
+    def _log_hotkeys_summary(self):
+        lines = [
+            f"[{i}] {combo}: {desc}"
+            for i, (combo, desc) in enumerate(self.HOTKEYS_INFO, start=1)
+        ]
+        self.log("Phím tắt đã cài:\n" + "\n".join(lines))
 
     def on_tab_changed(self, event=None):
         if self.notebook.nametowidget(self.notebook.select()) is not self.data_tab:
@@ -520,6 +598,10 @@ class App:
         đọc lại từ disk, KHÔNG đụng data_selected/data_dirty. Dùng khi chỉ
         cần cập nhật giao diện (vd đổi cỡ chữ/ảnh khi phóng to cửa sổ) mà
         không được làm mất các tick chọn/sửa chưa Lưu."""
+        if self.data_editing is not None:
+            # Sắp xóa hết các dòng Treeview - hủy ô sửa dở (nếu có) trước để
+            # khỏi để lại ô Entry nổi lơ lửng không còn gắn với dòng nào.
+            self._cancel_row_edit()
         self.data_answer_map = {}
         self.data_question_map = {}
         self.data_tree.delete(*self.data_tree.get_children())
@@ -563,6 +645,9 @@ class App:
         )
         self.data_tree.tag_configure("answer", font=("TkDefaultFont", font_size))
         self.data_tree.column("#0", width=round(self.DATA_TREE_BASE_WIDTH * scale))
+        self.data_tree.column(
+            "edit", width=round(self.DATA_TREE_BASE_EDIT_COL_WIDTH * scale)
+        )
         self._redraw_data_tree()
 
     def add_data_tab_record(self, record):
@@ -586,12 +671,17 @@ class App:
             "end",
             text=self._question_display_text(key, record, index),
             image=self._get_thumbnail(record.get("image_hash")),
+            values=(self.EDIT_ICON,),
             tags=("question",),
         )
         self.data_question_map[key] = qid
         for a_index, answer in enumerate(record.get("answers", [])):
             item_id = self.data_tree.insert(
-                qid, "end", text=self._answer_display_text(answer), tags=("answer",)
+                qid,
+                "end",
+                text=self._answer_display_text(answer),
+                values=(self.EDIT_ICON,),
+                tags=("answer",),
             )
             self.data_answer_map[item_id] = (key, a_index)
 
@@ -633,9 +723,22 @@ class App:
         # checkbox khi bấm đúng vào phần chữ/ảnh của dòng.
         if self.data_tree.identify_element(event.x, event.y).endswith("indicator"):
             return
-        if self.data_tree.identify("region", event.x, event.y) != "tree":
-            return
+
+        region = self.data_tree.identify("region", event.x, event.y)
         item_id = self.data_tree.identify_row(event.y)
+
+        if region == "cell" and self.data_tree.identify_column(event.x) == "#1":
+            if item_id:
+                self._toggle_row_edit(item_id)
+            return
+
+        # Bấm ra chỗ khác (checkbox, +/-, ...) trong khi đang sửa dở 1 dòng
+        # khác -> tự hủy sửa dở đó (không lưu), tránh 2 trạng thái chồng chéo.
+        if self.data_editing is not None:
+            self._cancel_row_edit()
+
+        if region != "tree":
+            return
         if not item_id:
             return
 
@@ -662,6 +765,93 @@ class App:
         self.data_tree.item(
             item_id, text=self._question_display_text(key, self.data_records[key], index)
         )
+
+    def _toggle_row_edit(self, item_id):
+        """Bấm cây bút (✏): mở ô sửa trực tiếp trên dòng đó, icon đổi thành
+        tệp tin (💾). Bấm lại vào chính icon tệp tin đó (cùng dòng) -> lưu."""
+        if self.data_editing is not None and self.data_editing["item_id"] == item_id:
+            self._save_row_edit()
+            return
+        if self.data_editing is not None:
+            self._cancel_row_edit()
+        self._start_row_edit(item_id)
+
+    def _start_row_edit(self, item_id):
+        if item_id in self.data_answer_map:
+            key, a_index = self.data_answer_map[item_id]
+            current_text = self.data_records[key]["answers"][a_index]["text"]
+            kind = "answer"
+        else:
+            key = next(
+                (k for k, qid in self.data_question_map.items() if qid == item_id),
+                None,
+            )
+            if key is None:
+                return
+            current_text = self.data_records[key]["question"]
+            a_index = None
+            kind = "question"
+
+        bbox = self.data_tree.bbox(item_id, "#0")
+        if not bbox:
+            return  # dòng đang không hiện (bị cuộn khuất/thu gọn)
+        x, y, width, height = bbox
+
+        entry = tk.Entry(self.data_tree)
+        entry.insert(0, current_text)
+        entry.select_range(0, "end")
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+        entry.bind("<Return>", lambda e: self._save_row_edit())
+        entry.bind("<Escape>", lambda e: self._cancel_row_edit())
+
+        self.data_tree.set(item_id, "edit", self.SAVE_ICON)
+        self.data_editing = {
+            "item_id": item_id,
+            "key": key,
+            "kind": kind,
+            "answer_index": a_index,
+            "entry": entry,
+        }
+
+    def _cancel_row_edit(self):
+        if self.data_editing is None:
+            return
+        item_id = self.data_editing["item_id"]
+        self.data_editing["entry"].destroy()
+        if self.data_tree.exists(item_id):
+            self.data_tree.set(item_id, "edit", self.EDIT_ICON)
+        self.data_editing = None
+
+    def _save_row_edit(self):
+        editing = self.data_editing
+        if editing is None:
+            return
+        new_text = editing["entry"].get().strip()
+        if not new_text:
+            self.log("Không được để trống nội dung - đã hủy sửa.")
+            self._cancel_row_edit()
+            return
+
+        key = editing["key"]
+        if editing["kind"] == "question":
+            record = self.data_records.pop(key)
+            record["question"] = new_text
+            new_key = self._record_key(new_text, record.get("image_hash"))
+            self.data_records[new_key] = record
+            self.data_selected.discard(key)  # key cũ không còn tồn tại nữa
+            self.ocr_records.pop(key, None)  # bỏ bản ghi cũ (đã đổi tên) khỏi bộ nhớ tab App
+        else:
+            self.data_records[key]["answers"][editing["answer_index"]]["text"] = new_text
+
+        editing["entry"].destroy()
+        self.data_editing = None
+
+        if not self._write_data_records_to_disk(self.data_records):
+            return
+        self.ocr_records.update(self.data_records)
+        self.log("Đã lưu chỉnh sửa vào " + OCR_RECORDS_PATH.name + ".")
+        self._redraw_data_tree()
 
     def _write_data_records_to_disk(self, records):
         try:
@@ -826,8 +1016,9 @@ class App:
         self.refresh_data_tab()
 
     def on_start_hotkey(self):
-        """Chạy trên thread của pynput GlobalHotKeys -> phải chuyển vào
-        main thread trước khi đụng tới widget Tkinter."""
+        """Chạy trên thread của pynput GlobalHotKeys -> phải chuyển vào main
+        thread trước khi đụng tới widget Tkinter. Ctrl+Shift+S dùng chung cho
+        cả App và Tool (mở chế độ detect)."""
         self.root.after(0, self.on_start_shortcut)
 
     def on_stop_hotkey(self):
@@ -836,8 +1027,11 @@ class App:
     def on_detect_one_hotkey(self):
         self.root.after(0, self.trigger_detect_one)
 
+    def on_tool_check_hotkey(self):
+        self.root.after(0, self.trigger_tool_check)
+
     def trigger_detect_one(self):
-        """Ctrl+Shift+Q: detect đúng 1 câu hỏi đang hiện trên màn hình rồi
+        """Ctrl+Shift+F: detect đúng 1 câu hỏi đang hiện trên màn hình rồi
         dừng ngay (đây là cách DUY NHẤT để quét - Start chỉ khởi động, không
         tự quét), ghi luôn vào json bất kể đã có sẵn y hệt hay chưa (không so
         sánh trùng lặp) - bấm lại để detect câu tiếp theo."""
@@ -948,12 +1142,168 @@ class App:
     def on_start_shortcut(self, event=None):
         if str(self.start_btn["state"]) == "disabled":
             return
-        self.start_detect_and_record()
+        self.open_detect()
 
     def on_stop_shortcut(self, event=None):
         if str(self.stop_btn["state"]) == "disabled":
             return
-        self.stop_detect_and_record()
+        self.close_detect()
+
+    def open_detect(self):
+        """Ctrl+Shift+S (dùng chung cho cả tab App và Tool): "mở" chế độ
+        detect - nạp sẵn model OCR (bước chậm nhất), KHÔNG tự quét gì. Sau
+        khi mở, Ctrl+Shift+F (tab App: detect 1 câu + ghi) và Ctrl+Shift+E
+        (tab Tool: detect 1 câu + đối chiếu, chỉ báo log) mới hoạt động
+        được."""
+        monitor = self.monitors[self.monitor_box.current()]
+        self.ocr_records = self.load_ocr_records()
+        self.detect_armed = True
+        self.start_btn.config(state="disabled")
+        self.stop_btn.config(state="normal")
+        self.tool_start_btn.config(state="disabled")
+        self.tool_stop_btn.config(state="normal")
+        self.status_var.set("Đã khởi động - Ctrl+Shift+F để detect 1 câu.")
+        self.tool_status_var.set("Đã khởi động - Ctrl+Shift+E để đối chiếu đáp án.")
+        self.log(f"Đã khởi động trên {monitor.name} - chưa quét.")
+        threading.Thread(target=self._preload_ocr_reader, daemon=True).start()
+
+    def close_detect(self):
+        self.detect_armed = False
+        self.start_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
+        self.tool_start_btn.config(state="normal")
+        self.tool_stop_btn.config(state="disabled")
+        self.status_var.set("Sẵn sàng.")
+        self.tool_status_var.set("Sẵn sàng.")
+        self.log("Đã dừng.")
+
+    def trigger_tool_check(self):
+        """Ctrl+Shift+E: detect đúng 1 câu hỏi đang hiện
+        trên màn hình, đối chiếu (so câu hỏi + ảnh) với đáp án đúng đã lưu
+        trong detected_questions.json, tự động click vào ô tròn của đáp án
+        đúng đó rồi báo kết quả qua log. Nếu không detect được câu hỏi, hoặc
+        detect được nhưng chưa có đáp án đúng nào được đánh dấu, cũng báo rõ
+        lý do (không click gì cả)."""
+        if not self.detect_armed:
+            self.log("Chưa Start (Ctrl+Shift+S) - bấm Start trước khi đối chiếu đáp án.")
+            return
+        if self._tool_check_busy:
+            self.log("Đang đối chiếu, đợi xong rồi bấm lại.")
+            return
+        try:
+            offset = int(self.tool_offset_var.get())
+        except ValueError:
+            self.log("Khoảng cách lề đáp án (Tool) không hợp lệ.")
+            return
+
+        monitor = self.monitors[self.monitor_box.current()]
+        self._tool_check_busy = True
+        self.log(f"[Tool] Đang quét + đối chiếu trên {monitor.name}...")
+
+        threading.Thread(
+            target=self.tool_check_worker, args=(monitor, offset), daemon=True
+        ).start()
+
+    def tool_check_worker(self, monitor, offset):
+        try:
+            try:
+                reader = self.get_ocr_reader()
+            except Exception as exc:
+                self.log(f"Lỗi khởi tạo OCR: {exc}")
+                return
+
+            bbox = (
+                monitor.x,
+                monitor.y,
+                monitor.x + monitor.width,
+                monitor.y + monitor.height,
+            )
+            try:
+                image = ImageGrab.grab(bbox=bbox)
+                results = self.ocr_read(reader, image)
+            except Exception as exc:
+                self.log(f"Lỗi khi chụp/OCR màn hình: {exc}")
+                return
+
+            blocks = self.find_question_blocks(results)
+            if not blocks:
+                limit = 120
+                preview = "\n".join(f"    - {t}" for _b, t in results[:limit])
+                extra = (
+                    f"\n    ... và {len(results) - limit} dòng nữa (đã cắt bớt)"
+                    if len(results) > limit
+                    else ""
+                )
+                self.log(
+                    "[Tool] Không tìm thấy câu hỏi nào trên màn hình.\n"
+                    f"Tổng {len(results)} dòng OCR đọc được:\n"
+                    + (preview or "    (không đọc được dòng nào)")
+                    + extra
+                )
+                return
+
+            block = blocks[0]  # chỉ lấy 1 câu hỏi đầu tiên tìm thấy
+            q_text = block["question_text"]
+            answer_items = block["answers"]
+
+            image_crop = self.extract_question_image(image, block)
+            image_hash = (
+                self.compute_image_hash(image_crop)
+                if image_crop is not None
+                else None
+            )
+
+            saved_key = self.resolve_record_key(q_text, image_hash)
+            if saved_key is None:
+                self.log(
+                    f'[Tool] "{q_text}" -> chưa có trong dữ liệu đã lưu. '
+                    "Detect câu này bên App (Ctrl+Shift+F) trước."
+                )
+                return
+
+            saved = self.ocr_records[saved_key]
+            correct_texts = {
+                a["text"] for a in saved.get("answers", []) if a.get("is_correct")
+            }
+            if not correct_texts:
+                self.log(
+                    f'[Tool] "{q_text}" -> chưa đánh dấu đáp án đúng. '
+                    "Vào tab Data để tích chọn rồi Lưu."
+                )
+                return
+
+            match = next(
+                (
+                    (a_box, a_text)
+                    for a_box, a_text in answer_items
+                    if a_text in correct_texts
+                ),
+                None,
+            )
+            if match is None:
+                self.log(
+                    f'[Tool] "{q_text}" -> đáp án đúng: ' + "; ".join(correct_texts)
+                    + " - nhưng không khớp vị trí trên màn hình (OCR lệch chữ?), "
+                    "chưa click."
+                )
+                return
+
+            a_box, a_text = match
+            rect = self.box_to_rect(a_box, monitor.x, monitor.y)
+            click_x = rect["x"] - offset
+            click_y = rect["y"] + rect["height"] // 2
+
+            try:
+                pyautogui.moveTo(click_x, click_y, duration=0.2)
+                pyautogui.click()
+                self.log(
+                    f'[Tool] "{q_text}" -> Đã chọn đáp án đúng: "{a_text}" tại '
+                    f"({click_x}, {click_y})."
+                )
+            except pyautogui.FailSafeException:
+                self.log("[Tool] Dừng khẩn cấp (chuột chạm góc 0,0) - chưa click được.")
+        finally:
+            self._tool_check_busy = False
 
     def toggle_capture(self):
         if self.capturing:
@@ -1067,183 +1417,11 @@ class App:
         self.mouse_status_var.set("Đang dừng...")
         self.log("Đang dừng macro chuột...")
 
-    def start_tool(self):
-        try:
-            interval = float(self.tool_interval_var.get())
-            if interval <= 0:
-                raise ValueError
-        except ValueError:
-            self.tool_status_var.set("Chu kỳ quét không hợp lệ.")
-            self.log("Chu kỳ quét Tool không hợp lệ.")
-            return
-
-        try:
-            offset = int(self.tool_offset_var.get())
-        except ValueError:
-            self.tool_status_var.set("Khoảng cách lề không hợp lệ.")
-            self.log("Khoảng cách lề đáp án (Tool) không hợp lệ.")
-            return
-
-        monitor = self.monitors[self.monitor_box.current()]
-        self.ocr_records = self.load_ocr_records()
-        self.tool_stop_event.clear()
-        self.tool_start_btn.config(state="disabled")
-        self.tool_stop_btn.config(state="normal")
-        self.tool_status_var.set("Đang chạy...")
-        self.log(
-            f"Bắt đầu Tool (đối chiếu đáp án đúng + click) trên {monitor.name}, "
-            f"chu kỳ {interval}s."
-        )
-
-        self.tool_thread = threading.Thread(
-            target=self.tool_worker, args=(monitor, interval, offset), daemon=True
-        )
-        self.tool_thread.start()
-
-    def stop_tool(self):
-        self.tool_stop_event.set()
-        self.tool_status_var.set("Đang dừng...")
-        self.log("Đang dừng Tool...")
-
-    def tool_worker(self, monitor, interval, offset):
-        try:
-            reader = self.get_ocr_reader()
-        except Exception as exc:
-            self.log(f"Lỗi khởi tạo OCR: {exc}")
-            self.root.after(0, self.on_tool_finished)
-            return
-
-        bbox = (
-            monitor.x,
-            monitor.y,
-            monitor.x + monitor.width,
-            monitor.y + monitor.height,
-        )
-        answered = set()  # record key (câu hỏi + hash ảnh) đã click trong phiên Tool này
-        self._last_tool_frame_sig = None
-        try:
-            while not self.tool_stop_event.is_set():
-                try:
-                    image = ImageGrab.grab(bbox=bbox)
-                except Exception as exc:
-                    self.log(f"Lỗi khi chụp màn hình: {exc}")
-                    if self.wait_tool_cancelable(interval):
-                        break
-                    continue
-
-                frame_sig = self._frame_signature(image)
-                if frame_sig is not None and frame_sig == self._last_tool_frame_sig:
-                    # Màn hình chưa đổi so với lần quét trước -> khỏi OCR lại.
-                    if self.wait_tool_cancelable(interval):
-                        break
-                    continue
-                self._last_tool_frame_sig = frame_sig
-
-                try:
-                    results = self.ocr_read(reader, image)
-                except Exception as exc:
-                    self.log(f"Lỗi khi OCR màn hình: {exc}")
-                    results = []
-
-                for block in self.find_question_blocks(results):
-                    q_text = block["question_text"]
-                    answer_items = block["answers"]
-
-                    image_crop = self.extract_question_image(image, block)
-                    image_hash = (
-                        self.compute_image_hash(image_crop)
-                        if image_crop is not None
-                        else None
-                    )
-                    saved_key = self.resolve_record_key(q_text, image_hash)
-                    if saved_key is None:
-                        continue  # chưa có trong dữ liệu đã lưu
-                    if saved_key in answered:
-                        continue
-                    saved = self.ocr_records[saved_key]
-
-                    correct_texts = {
-                        a["text"] for a in saved.get("answers", []) if a.get("is_correct")
-                    }
-                    if not correct_texts:
-                        continue  # chưa đối chiếu được đáp án đúng, bỏ qua
-
-                    match = next(
-                        (
-                            (a_box, a_text)
-                            for a_box, a_text in answer_items
-                            if a_text in correct_texts
-                        ),
-                        None,
-                    )
-                    if match is None:
-                        continue
-
-                    a_box, a_text = match
-                    rect = self.box_to_rect(a_box, monitor.x, monitor.y)
-                    click_x = rect["x"] - offset
-                    click_y = rect["y"] + rect["height"] // 2
-
-                    try:
-                        pyautogui.moveTo(click_x, click_y, duration=0.2)
-                        pyautogui.click()
-                        answered.add(saved_key)
-                        self.log(
-                            f"[TOOL] Click đáp án đúng cho '{q_text}': '{a_text}' "
-                            f"tại ({click_x}, {click_y})."
-                        )
-                    except pyautogui.FailSafeException:
-                        self.log("Tool dừng khẩn cấp (chuột chạm góc 0,0).")
-                        self.tool_stop_event.set()
-                        break
-
-                if self.wait_tool_cancelable(interval):
-                    break
-        finally:
-            self.log("Đã dừng Tool.")
-            self.root.after(0, self.on_tool_finished)
-
-    def wait_tool_cancelable(self, seconds):
-        end = time.time() + seconds
-        while time.time() < end:
-            if self.tool_stop_event.is_set():
-                return True
-            time.sleep(min(0.05, max(0.0, end - time.time())))
-        return False
-
-    def on_tool_finished(self):
-        self.tool_start_btn.config(state="normal")
-        self.tool_stop_btn.config(state="disabled")
-        self.tool_status_var.set("Sẵn sàng.")
-
-    def start_detect_and_record(self):
-        """Chỉ "khởi động": nạp sẵn model OCR (bước chậm nhất), KHÔNG tự quét
-        màn hình. Quét thực sự chỉ diễn ra khi bấm Ctrl+Shift+Q
-        (trigger_detect_one), mỗi lần đúng 1 câu."""
-        monitor = self.monitors[self.monitor_box.current()]
-        self.ocr_records = self.load_ocr_records()
-        self.detect_armed = True
-        self.start_btn.config(state="disabled")
-        self.stop_btn.config(state="normal")
-        self.status_var.set("Đã khởi động - Ctrl+Shift+Q để detect 1 câu.")
-        self.log(
-            f"Đã khởi động trên {monitor.name} (chưa quét). Bấm Ctrl+Shift+Q để "
-            f"detect từng câu (file: {OCR_RECORDS_PATH.name})."
-        )
-        threading.Thread(target=self._preload_ocr_reader, daemon=True).start()
-
     def _preload_ocr_reader(self):
         try:
             self.get_ocr_reader()
         except Exception as exc:
             self.log(f"Lỗi khởi tạo OCR: {exc}")
-
-    def stop_detect_and_record(self):
-        self.detect_armed = False
-        self.start_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
-        self.status_var.set("Sẵn sàng.")
-        self.log("Đã dừng.")
 
     @staticmethod
     def _gpu_available():
@@ -1342,7 +1520,12 @@ class App:
     # "giả" (số nằm trong nội dung câu trả lời, vd "5." trong "và 5. 2-..."),
     # khoảng trắng ngăn cách trước mốc THẬT kế tiếp ("2-") sẽ bị nuốt mất,
     # khiến finditer (vốn không overlap) không thể nhận ra mốc đó nữa.
-    _MERGED_ANSWER_MARKER_PATTERN = re.compile(r"(?<!\S)(\d{1,2})[-.]")
+    # Bắt riêng dấu phân cách (-/.) ở group 2: nội dung đáp án có thể tự
+    # chứa số trùng ĐÚNG số thứ tự kỳ vọng (vd "3-Hướng 1 và 4. 4-Hướng 2 và
+    # 3." - số "4." trong câu 3 trùng đúng số 4 kỳ vọng tiếp theo, dễ bị
+    # nhầm là mốc thật) - chỉ chấp nhận mốc dùng ĐÚNG dấu phân cách như mốc
+    # đầu tiên (thường luôn là "-") để loại các số ngẫu nhiên dùng dấu chấm.
+    _MERGED_ANSWER_MARKER_PATTERN = re.compile(r"(?<!\S)(\d{1,2})([-.])")
 
     @classmethod
     def _split_merged_answer_text(cls, text):
@@ -1350,18 +1533,22 @@ class App:
         if len(matches) <= 1:
             return [text]
         # Bỏ qua (không phải break) các match không khớp số kỳ vọng tiếp
-        # theo: nội dung đáp án có thể tự chứa số trùng dạng "N-"/"N."
-        # (vd "1-Hướng 2 và 5. 2-Chỉ hướng 1." có "5." là 1 phần câu, không
-        # phải mốc đáp án) - break sớm sẽ bỏ lỡ mốc thật nằm phía sau.
+        # theo, hoặc khác dấu phân cách với mốc đầu tiên: nội dung đáp án có
+        # thể tự chứa số trùng dạng "N-"/"N." (vd "1-Hướng 2 và 5. 2-Chỉ
+        # hướng 1." có "5." là 1 phần câu, không phải mốc đáp án) - break
+        # sớm sẽ bỏ lỡ mốc thật nằm phía sau.
         starts = []
         expected = None
+        separator = None
         for m in matches:
             num = int(m.group(1))
+            sep = m.group(2)
             if expected is None:
                 starts.append(m.start())
                 expected = num + 1
+                separator = sep
                 continue
-            if num == expected:
+            if num == expected and sep == separator:
                 starts.append(m.start())
                 expected += 1
         if len(starts) <= 1:
@@ -1392,15 +1579,18 @@ class App:
         matches = list(cls._MERGED_ANSWER_MARKER_PATTERN.finditer(text))
         starts = []
         expected = None
+        separator = None
         for m in matches:
             num = int(m.group(1))
+            sep = m.group(2)
             if expected is None:
                 if num != 1:
                     continue  # phải bắt đầu đúng từ "1-" mới chắc là đáp án
                 starts.append(m.start())
                 expected = 2
+                separator = sep
                 continue
-            if num == expected:
+            if num == expected and sep == separator:
                 starts.append(m.start())
                 expected += 1
 
@@ -1560,6 +1750,34 @@ class App:
     # Khoảng cách Hamming tối đa giữa 2 perceptual hash để coi là cùng 1 ảnh.
     IMAGE_HASH_MATCH_THRESHOLD = 6
 
+    # Ngưỡng coi 1 pixel là "trắng" (nền thẻ câu hỏi): dưới 255 một chút để
+    # chịu được nén ảnh/anti-aliasing quanh mép, thay vì đòi đúng tuyệt đối
+    # (255,255,255).
+    WHITE_TRIM_THRESHOLD = 248
+
+    def _trim_white_border(self, pil_image):
+        """Cắt bỏ viền trắng thừa quanh ảnh minh họa: ảnh thật luôn nằm trên
+        nền trắng của thẻ câu hỏi, nên biên ảnh thật chính xác là nơi cả 4
+        cạnh xung quanh đều là màu trắng. Đáng tin cậy hơn nhiều so với chỉ
+        ước lượng vùng cắt từ vị trí các dòng chữ (dễ lấy thiếu/thừa tùy
+        layout, gây hiện tượng "lúc được lúc không hết hình")."""
+        try:
+            gray = np.array(pil_image.convert("L"))
+        except Exception:
+            return pil_image
+        non_white = gray < self.WHITE_TRIM_THRESHOLD
+        if not non_white.any():
+            return pil_image  # toàn trắng (không tìm được nội dung), giữ nguyên
+        rows = np.any(non_white, axis=1)
+        cols = np.any(non_white, axis=0)
+        top = int(np.argmax(rows))
+        bottom = int(len(rows) - 1 - np.argmax(rows[::-1]))
+        left = int(np.argmax(cols))
+        right = int(len(cols) - 1 - np.argmax(cols[::-1]))
+        if right <= left or bottom <= top:
+            return pil_image
+        return pil_image.crop((left, top, right + 1, bottom + 1))
+
     def extract_question_image(self, pil_image, block):
         """Crop the illustration image (if any) sitting between the header
         and the question text of `block`. Returns a PIL image, or None if
@@ -1597,24 +1815,17 @@ class App:
         if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
             return None
         try:
-            return pil_image.crop(crop_box)
+            cropped = pil_image.crop(crop_box)
         except Exception:
             return None
+        # crop_box ở trên chỉ là vùng TÌM KIẾM rộng rãi (ước lượng từ vị trí
+        # chữ, có thể thừa khoảng trắng hoặc thiếu/thừa tùy layout) - cắt gọn
+        # lại đúng biên ảnh thật bằng cách tìm nơi 4 cạnh xung quanh toàn màu
+        # trắng.
+        return self._trim_white_border(cropped)
 
     @staticmethod
     def compute_image_hash(pil_image):
-        try:
-            return str(imagehash.average_hash(pil_image))
-        except Exception:
-            return None
-
-    @staticmethod
-    def _frame_signature(pil_image):
-        # OCR (đặc biệt với upscale) tốn thời gian gấp nhiều lần so với hash
-        # ảnh (average_hash tự resize xuống 8x8 nên rất rẻ dù ảnh gốc to).
-        # Giữa các chu kỳ quét, màn hình thường không đổi (người dùng đang
-        # đọc câu hỏi) -> bỏ qua hẳn bước OCR khi ảnh chụp giống hệt lần
-        # trước, tăng tốc đáng kể mà không ảnh hưởng độ chính xác.
         try:
             return str(imagehash.average_hash(pil_image))
         except Exception:
@@ -1836,7 +2047,6 @@ class App:
 
     def on_close(self):
         self.stop_event.set()
-        self.tool_stop_event.set()
         self.stop_capture()
         self.hide_log_overlay()
         if self.hotkey_listener is not None:
@@ -1844,11 +2054,27 @@ class App:
         self.root.destroy()
 
 
+def ensure_storage_exists():
+    """Tạo sẵn file JSON + thư mục ảnh lưu trữ ngay khi mở app, kể cả trước
+    khi detect được câu nào - thay vì chỉ tự tạo âm thầm ở lần lưu đầu tiên."""
+    try:
+        QUESTION_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+        if not OCR_RECORDS_PATH.exists():
+            OCR_RECORDS_PATH.write_text("[]", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def main():
     try_fix_xwayland_auth()
+    ensure_storage_exists()
     root = tk.Tk()
     App(root)
     remove_window_icon(root)
+    try:
+        root.state("zoomed")  # mở app lên là full màn hình (Maximize) sẵn
+    except tk.TclError:
+        pass
     root.mainloop()
 
 
