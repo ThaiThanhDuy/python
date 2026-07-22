@@ -1,2 +1,5 @@
 pyautogui
 screeninfo
+pynput
+easyocr
+imagehash
